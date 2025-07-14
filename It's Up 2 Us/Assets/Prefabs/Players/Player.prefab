@@ -212,7 +212,7 @@ Rigidbody2D:
   m_Mass: 1
   m_LinearDrag: 0
   m_AngularDrag: 0.05
-  m_GravityScale: 1
+  m_GravityScale: 2
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2
@@ -236,8 +236,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9d2bbf9826908e2469c2c5333009ced0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  moveSpeed: 5
-  crouchSpeedMultiplier: 0.5
+  moveSpeed: 6
+  crouchSpeedMultiplier: 0.6
   leftKey: 97
   rightKey: 100
   crouchKey: 115
