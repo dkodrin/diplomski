@@ -18,8 +18,10 @@ public class PlayerMovement : MonoBehaviour
     [Header("Ground / Roof Check")]
     public Transform groundCheck;
     public float groundCheckRadius = 0.1f;
-    [Tooltip("Includes floor tiles + roof-colliders on players")]
+    [Tooltip("Only real floor tiles here")]
     public LayerMask groundLayer;
+    [Tooltip("Other players’ foot‑colliders only")]
+    public LayerMask playerLayer;
 
     [Header("Colliders (assign in Inspector)")]
     public BoxCollider2D bottomCollider;  // 1×1 feet
@@ -40,9 +42,9 @@ public class PlayerMovement : MonoBehaviour
     Vector3     topOrigLocalPos;
     Vector3     topCrouchLocalPos;
     float       crouchSpeed;
-    bool        isCrouching = false;
-    bool        jumpReady    = false;
-    bool        isClimbing   = false;
+    bool        isCrouching   = false;
+    bool        jumpReady     = true;  // start able to jump
+    bool        isClimbing    = false;
     float       origGravity;
 
     void Awake()
@@ -50,28 +52,22 @@ public class PlayerMovement : MonoBehaviour
         rb          = GetComponent<Rigidbody2D>();
         origGravity = rb.gravityScale;
 
-        // cache local positions
         topOrigLocalPos   = topCollider.transform.localPosition;
         topCrouchLocalPos = bottomCollider.transform.localPosition;
 
-        float dist     = Vector3.Distance(topOrigLocalPos, topCrouchLocalPos);
-        crouchSpeed    = dist / Mathf.Max(0.001f, transitionTime);
+        float dist = Vector3.Distance(topOrigLocalPos, topCrouchLocalPos);
+        crouchSpeed = dist / Mathf.Max(0.001f, transitionTime);
     }
 
     void Update()
     {
-        // 1) Crouch state
-        bool inputCrouch = Input.GetKey(crouchKey);
-        if (inputCrouch)
-        {
+        // 1) Crouch
+        if (Input.GetKey(crouchKey))
             isCrouching = true;
-        }
         else if (isCrouching && CanUncrouch())
-        {
             isCrouching = false;
-        }
 
-        // 2) Slide top collider
+        // slide collider
         Vector3 targetPos = isCrouching ? topCrouchLocalPos : topOrigLocalPos;
         topCollider.transform.localPosition = Vector3.MoveTowards(
             topCollider.transform.localPosition,
@@ -79,37 +75,28 @@ public class PlayerMovement : MonoBehaviour
             crouchSpeed * Time.deltaTime
         );
 
-        // 3) Horizontal movement
+        // 2) Horizontal input
         float h = Input.GetKey(leftKey)  ? -1f
                 : Input.GetKey(rightKey) ?  1f
                 : 0f;
 
-        // 4) Ground check *without* velocity condition
-        bool nowGrounded = Physics2D.OverlapCircle(
-            groundCheck.position,
-            groundCheckRadius,
-            groundLayer
-        );
-
-        // 5) Ladder climb vs normal movement
+        // 3) Movement / Climb
         if (isClimbing)
         {
             rb.gravityScale = 0f;
-            float v = Input.GetKey(jumpKey)  ?  climbSpeed
-                    : Input.GetKey(crouchKey)? -climbSpeed
+            float v = Input.GetKey(jumpKey)   ?  climbSpeed
+                    : Input.GetKey(crouchKey) ? -climbSpeed
                     : 0f;
-            float speed = moveSpeed * (isCrouching && nowGrounded ? crouchSpeedMultiplier : 1f);
+            float speed = moveSpeed * (isCrouching && IsGrounded() ? crouchSpeedMultiplier : 1f);
             rb.velocity = new Vector2(h * speed, v);
-
-            if (nowGrounded) jumpReady = true;
         }
         else
         {
             rb.gravityScale = origGravity;
-            float speed = moveSpeed * (isCrouching && nowGrounded ? crouchSpeedMultiplier : 1f);
+            float speed = moveSpeed * (isCrouching && IsGrounded() ? crouchSpeedMultiplier : 1f);
             rb.velocity = new Vector2(h * speed, rb.velocity.y);
 
-            if (nowGrounded) jumpReady = true;
+            // 4) Jump
             if (jumpReady && Input.GetKeyDown(jumpKey))
             {
                 float g   = Mathf.Abs(Physics2D.gravity.y * rb.gravityScale);
@@ -120,19 +107,40 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    bool IsGrounded()
+    {
+        return Physics2D.OverlapCircle(
+            groundCheck.position,
+            groundCheckRadius,
+            groundLayer
+        );
+    }
+
+    void OnCollisionEnter2D(Collision2D col)
+    {
+        // only reset jump when our feet land on ground or player
+        if (col.otherCollider != bottomCollider) return;
+
+        int mask = 1 << col.collider.gameObject.layer;
+        if ((mask & (groundLayer | playerLayer)) == 0) return;
+
+        foreach (var ct in col.contacts)
+        {
+            if (ct.normal.y > 0.5f)
+            {
+                jumpReady = true;
+                break;
+            }
+        }
+    }
+
     bool CanUncrouch()
     {
-        // world-space center of the top collider at standing pos
         Vector3 localCenter = topOrigLocalPos + (Vector3)topCollider.offset;
         Vector2 worldCenter = (Vector2)topCollider.transform.parent.TransformPoint(localCenter);
-
-        // full size in world units, shrink only height
         Vector2 size = Vector2.Scale(topCollider.size, topCollider.transform.lossyScale);
         size.y = Mathf.Max(0f, size.y - uncrouchBuffer);
-
-        // inset only the top edge
         Vector2 testCenter = worldCenter + Vector2.down * (uncrouchBuffer * 0.5f);
-
         return Physics2D.OverlapBox(testCenter, size, 0f, groundLayer) == null;
     }
 
@@ -146,24 +154,5 @@ public class PlayerMovement : MonoBehaviour
     {
         if (((1 << col.gameObject.layer) & ladderLayer) != 0)
             isClimbing = false;
-    }
-
-    void OnDrawGizmosSelected()
-    {
-        if (groundCheck != null)
-        {
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
-        }
-        if (Application.isPlaying)
-        {
-            Vector2 size = Vector2.Scale(topCollider.size, topCollider.transform.lossyScale);
-            size.y = Mathf.Max(0f, size.y - uncrouchBuffer);
-            Vector3 localCenter = topOrigLocalPos + (Vector3)topCollider.offset;
-            Vector2 worldCenter = topCollider.transform.parent.TransformPoint(localCenter);
-            Vector2 testCenter  = worldCenter + Vector2.down * (uncrouchBuffer * 0.5f);
-            Gizmos.color = Color.cyan;
-            Gizmos.DrawWireCube(testCenter, size);
-        }
     }
 }
