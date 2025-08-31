@@ -20,7 +20,7 @@ public class PlayerMovement : MonoBehaviour
     public float groundCheckRadius = 0.1f;
     [Tooltip("Only real floor tiles here")]
     public LayerMask groundLayer;
-    [Tooltip("Other players’ foot‑colliders only")]
+    [Tooltip("Other players’ foot-colliders only")]
     public LayerMask playerLayer;
 
     [Header("Colliders (assign in Inspector)")]
@@ -61,26 +61,38 @@ public class PlayerMovement : MonoBehaviour
 
     void Update()
     {
-        // 1) Crouch
+        // 1) Crouch intent: hold to crouch, release to try uncrouch (only if there’s room)
         if (Input.GetKey(crouchKey))
+        {
             isCrouching = true;
+        }
         else if (isCrouching && CanUncrouch())
+        {
             isCrouching = false;
+        }
 
-        // slide collider
-        Vector3 targetPos = isCrouching ? topCrouchLocalPos : topOrigLocalPos;
-        topCollider.transform.localPosition = Vector3.MoveTowards(
-            topCollider.transform.localPosition,
-            targetPos,
-            crouchSpeed * Time.deltaTime
-        );
+        // 2) Upper collider placement:
+        //    - Smooth DOWN into crouch
+        //    - SNAP UP to full height only when CanUncrouch() passed (prevents mid-step overlap/pop)
+        if (isCrouching)
+        {
+            topCollider.transform.localPosition = Vector3.MoveTowards(
+                topCollider.transform.localPosition,
+                topCrouchLocalPos,
+                crouchSpeed * Time.deltaTime
+            );
+        }
+        else
+        {
+            topCollider.transform.localPosition = topOrigLocalPos;
+        }
 
-        // 2) Horizontal input
+        // 3) Horizontal input
         float h = Input.GetKey(leftKey)  ? -1f
                 : Input.GetKey(rightKey) ?  1f
                 : 0f;
 
-        // 3) Movement / Climb
+        // 4) Movement / Climb
         if (isClimbing)
         {
             rb.gravityScale = 0f;
@@ -96,7 +108,7 @@ public class PlayerMovement : MonoBehaviour
             float speed = moveSpeed * (isCrouching && IsGrounded() ? crouchSpeedMultiplier : 1f);
             rb.velocity = new Vector2(h * speed, rb.velocity.y);
 
-            // 4) Jump
+            // 5) Jump
             if (jumpReady && Input.GetKeyDown(jumpKey))
             {
                 float g   = Mathf.Abs(Physics2D.gravity.y * rb.gravityScale);
@@ -116,9 +128,9 @@ public class PlayerMovement : MonoBehaviour
         );
     }
 
+    // Re-enable jump when feet land (Enter)…
     void OnCollisionEnter2D(Collision2D col)
     {
-        // only reset jump when our feet land on ground or player
         if (col.otherCollider != bottomCollider) return;
 
         int mask = 1 << col.collider.gameObject.layer;
@@ -134,13 +146,38 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    // …and also across tilemap seams (Stay)
+    void OnCollisionStay2D(Collision2D col)
+    {
+        if (col.otherCollider != bottomCollider) return;
+
+        int mask = 1 << col.collider.gameObject.layer;
+        if ((mask & (groundLayer | playerLayer)) == 0) return;
+
+        if (rb.velocity.y <= 0f)
+        {
+            foreach (var ct in col.contacts)
+            {
+                if (ct.normal.y > 0.7f)
+                {
+                    jumpReady = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Final standing-pose clearance test (no mid-step movement upward)
     bool CanUncrouch()
     {
         Vector3 localCenter = topOrigLocalPos + (Vector3)topCollider.offset;
         Vector2 worldCenter = (Vector2)topCollider.transform.parent.TransformPoint(localCenter);
+
         Vector2 size = Vector2.Scale(topCollider.size, topCollider.transform.lossyScale);
         size.y = Mathf.Max(0f, size.y - uncrouchBuffer);
+
         Vector2 testCenter = worldCenter + Vector2.down * (uncrouchBuffer * 0.5f);
+
         return Physics2D.OverlapBox(testCenter, size, 0f, groundLayer) == null;
     }
 
