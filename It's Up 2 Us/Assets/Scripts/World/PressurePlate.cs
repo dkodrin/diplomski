@@ -10,106 +10,131 @@ public class PressurePlate : MonoBehaviour
     [Tooltip("Which layers can press this plate (players, crates, stones…)")]
     public LayerMask pressingMask;
 
-    [Tooltip("If non-empty, runs in COMBINED mode using these child sensors")]
-    public PressurePlate[] linkedPlates;
+    [Tooltip("If true, the plate locks permanently On the first time it is pressed.\n" +
+             "Use this for single plates that trigger one-way events (ladder drop, etc.).\n" +
+             "Has no effect when groupPlates is non-empty.")]
+    public bool lockOnPress = false;
+
+    [Tooltip("Other plates in the same group. When set, this plate shows\n" +
+             "'Pressed' (yellow) when only some of the group are pressed,\n" +
+             "and 'On' (green) only when every plate in the group is pressed.\n" +
+             "Leave empty for a standalone plate that goes straight Off→On.")]
+    public PressurePlate[] groupPlates;
 
     [Header("Plate Sprites")]
-    public Sprite spriteOff;      // no plates pressed
-    public Sprite spritePressed;  // some but not all pressed (combined mode only)
-    public Sprite spriteOn;       // solo pressed, or all linked plates pressed
+    public Sprite spriteOff;       // nobody on this plate
+    public Sprite spritePressed;   // this plate is down but not all group plates are
+    public Sprite spriteOn;        // all group plates (or this standalone plate) are pressed
 
     [Header("Events")]
     /// <summary>
-    /// Fired whenever the combined state changes (after startup).
+    /// Fired whenever this plate's visual state changes.
     /// Arg = 0 (Off), 1 (Pressed), 2 (On)
     /// </summary>
     public UnityEvent<int> onStateChanged;
 
-    // internals
+    // ── internals ──────────────────────────────────────────
     SpriteRenderer _sr;
-    Collider2D     _col;
-    int            _pressCount = 0;  // SOLO mode only
-    bool           _isPressed  = false;
-    int            _lastState  = -1;
+    int            _pressCount  = 0;
+    bool           _locked      = false;
+    int            _lastState   = -1;
     bool           _initialized = false;
 
-    /// <summary>0=Off, 1=Pressed, 2=On</summary>
+    /// <summary>True while at least one valid object is standing on this plate.</summary>
+    public bool IsPressed => _pressCount > 0 || _locked;
+
+    /// <summary>0 = Off, 1 = Pressed (partial group), 2 = On (all pressed / locked)</summary>
     public int LastState => _lastState;
 
-    bool IsCombined => linkedPlates != null && linkedPlates.Length > 0;
+    bool IsGrouped => groupPlates != null && groupPlates.Length > 0;
 
+    // ── Unity ──────────────────────────────────────────────
     void Awake()
     {
-        _sr  = GetComponent<SpriteRenderer>();
-        _col = GetComponent<Collider2D>();
+        _sr = GetComponent<SpriteRenderer>();
 
-        // offset sprite so it sits flush regardless of collider offset
-        Vector3 colOff = _col.offset;
-        _sr.transform.localPosition = -new Vector3(colOff.x, colOff.y, 0f);
-
-        // subscribe to child plates if in combined mode
-        if (IsCombined)
-            foreach (var p in linkedPlates)
+        // When grouped, listen to every sibling so we can repaint when they change
+        if (IsGrouped)
+            foreach (var p in groupPlates)
                 p.onStateChanged.AddListener(_ => RecalcState());
 
-        // initial sprite setup without firing events
         RecalcState();
         _initialized = true;
     }
 
     void OnTriggerEnter2D(Collider2D col)
     {
-        if (IsCombined) return;
+        if (_locked) return;
         if (((1 << col.gameObject.layer) & pressingMask) == 0) return;
 
         _pressCount++;
-        if (!_isPressed)
-        {
-            _isPressed = true;
-            RecalcState();
-        }
+        RecalcState();
     }
 
     void OnTriggerExit2D(Collider2D col)
     {
-        if (IsCombined) return;
+        if (_locked) return;
         if (((1 << col.gameObject.layer) & pressingMask) == 0) return;
 
         _pressCount = Math.Max(0, _pressCount - 1);
-        if (_isPressed && _pressCount == 0)
-        {
-            _isPressed = false;
-            RecalcState();
-        }
+        RecalcState();
     }
 
+    // ── Public API ─────────────────────────────────────────
+
+    /// <summary>
+    /// Called by DoorController to permanently lock this plate in the On state.
+    /// </summary>
+    public void Lock()
+    {
+        if (_locked) return;
+        _locked = true;
+        RecalcState();
+    }
+
+    // ── Core state logic ───────────────────────────────────
     void RecalcState()
     {
         int state;
 
-        if (!IsCombined)
+        if (_locked)
         {
-            // SOLO: Off (0) or On (2)
-            state = _isPressed ? 2 : 0;
+            state = 2;
+        }
+        else if (!IsGrouped)
+        {
+            // Standalone plate: Off or On only
+            state = (_pressCount > 0) ? 2 : 0;
+
+            // Lock permanently on first press if requested
+            if (state == 2 && lockOnPress)
+                _locked = true;
         }
         else
         {
-            // COMBINED: count how many linked plates are pressed
-            int cnt = linkedPlates.Count(p => p._isPressed);
-            if      (cnt == 0)                  state = 0;
-            else if (cnt < linkedPlates.Length) state = 1;
-            else                                 state = 2;
+            // Grouped: show Pressed when this plate is down but not all siblings
+            bool thisDown = _pressCount > 0;
+
+            if (!thisDown)
+            {
+                // This plate isn't pressed — Off regardless of siblings
+                state = 0;
+            }
+            else
+            {
+                // This plate is pressed — check if every sibling is also pressed
+                bool allDown = groupPlates.All(p => p.IsPressed);
+                state = allDown ? 2 : 1;
+            }
         }
 
         if (state == _lastState && _initialized) return;
         _lastState = state;
 
-        // update sprite
-        _sr.sprite = (state == 0 ? spriteOff
-                  : state == 1 ? spritePressed
-                                : spriteOn);
+        _sr.sprite = state == 0 ? spriteOff
+                   : state == 1 ? spritePressed
+                                : spriteOn;
 
-        // fire event only after initialization
         if (_initialized)
             onStateChanged.Invoke(state);
     }
